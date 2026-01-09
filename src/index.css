@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+:root {
+  --melon-primary: #10b981;
+  --melon-secondary: #059669;
+  --melon-accent: #34d399;
+  --melon-dark: #064e3b;
+  --melon-bg: #0a0a0f;
+  --melon-surface: #111118;
+  --melon-border: #1f1f2e;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--melon-bg);
+  color: #e5e5e5;
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--melon-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--melon-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--melon-primary);
+}
+
+.glow-green {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+}
+
+.gradient-border {
+  background: linear-gradient(135deg, var(--melon-primary), var(--melon-accent));
+  padding: 1px;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes typing {
+  0%, 60%, 100% { opacity: 0.3; }
+  30% { opacity: 1; }
+}
+
+.typing-dot {
+  animation: typing 1.4s infinite;
+}
+
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
