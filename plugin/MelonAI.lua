@@ -14,17 +14,19 @@ local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterPlayer = game:GetService("StarterPlayer")
 local StarterGui = game:GetService("StarterGui")
+local Workspace = game:GetService("Workspace")
 
 local CONFIG = {
-	ENDPOINT = "https://your-melonai-deployment.vercel.app/api/plugin",
-	SESSION_ID = "your-session-id",
-	SECRET = "your-secret",
-	POLL_INTERVAL = 2
+	ENDPOINT = "",
+	SESSION_ID = "",
+	SECRET = "",
+	POLL_INTERVAL = 3
 }
 
 local toolbar = plugin:CreateToolbar("MelonAI")
 local connectButton = toolbar:CreateButton("Connect", "Connect to MelonAI", "rbxassetid://6031075938")
 local syncButton = toolbar:CreateButton("Sync Context", "Send project context to MelonAI", "rbxassetid://6031075929")
+local settingsButton = toolbar:CreateButton("Settings", "Open MelonAI Settings", "rbxassetid://6031075933")
 
 local connected = false
 local polling = false
@@ -37,7 +39,23 @@ local function log(message, isError)
 	end
 end
 
-local function makeRequest(requestType, data)
+local function makeRequest(requestType, extraData)
+	if CONFIG.ENDPOINT == "" or CONFIG.SESSION_ID == "" or CONFIG.SECRET == "" then
+		return false, "Configuration incomplete"
+	end
+	
+	local requestBody = {
+		type = requestType,
+		sessionId = CONFIG.SESSION_ID,
+		secret = CONFIG.SECRET
+	}
+	
+	if extraData then
+		for k, v in pairs(extraData) do
+			requestBody[k] = v
+		end
+	end
+	
 	local success, response = pcall(function()
 		return HttpService:RequestAsync({
 			Url = CONFIG.ENDPOINT,
@@ -45,19 +63,19 @@ local function makeRequest(requestType, data)
 			Headers = {
 				["Content-Type"] = "application/json"
 			},
-			Body = HttpService:JSONEncode({
-				type = requestType,
-				sessionId = CONFIG.SESSION_ID,
-				secret = CONFIG.SECRET,
-				data = data
-			})
+			Body = HttpService:JSONEncode(requestBody)
 		})
 	end)
 	
 	if success and response.Success then
-		return true, HttpService:JSONDecode(response.Body)
+		local decoded = HttpService:JSONDecode(response.Body)
+		return true, decoded
 	else
-		return false, response
+		if success then
+			return false, "HTTP " .. tostring(response.StatusCode) .. ": " .. tostring(response.Body)
+		else
+			return false, tostring(response)
+		end
 	end
 end
 
@@ -82,6 +100,8 @@ local function getParentFromPath(path)
 				current = StarterPlayer
 			elseif part == "StarterGui" then
 				current = StarterGui
+			elseif part == "Workspace" then
+				current = Workspace
 			elseif part == "StarterPlayerScripts" then
 				current = StarterPlayer:FindFirstChild("StarterPlayerScripts") or StarterPlayer
 			elseif part == "StarterCharacterScripts" then
@@ -91,6 +111,7 @@ local function getParentFromPath(path)
 				folder.Name = part
 				folder.Parent = current
 				current = folder
+				log("Created folder: " .. part)
 			end
 		end
 	end
@@ -102,7 +123,33 @@ local function createScript(action)
 	local scriptClass = action.scriptType
 	local name = action.name
 	local parent = getParentFromPath(action.parent)
-	local content = action.content
+	local content = action.content or ""
+	
+	if scriptClass == "RemoteEvent" then
+		local existing = parent:FindFirstChild(name)
+		if existing then
+			log("RemoteEvent already exists: " .. name)
+			return true
+		end
+		local remote = Instance.new("RemoteEvent")
+		remote.Name = name
+		remote.Parent = parent
+		log("Created RemoteEvent: " .. name .. " in " .. action.parent)
+		return true
+	end
+	
+	if scriptClass == "RemoteFunction" then
+		local existing = parent:FindFirstChild(name)
+		if existing then
+			log("RemoteFunction already exists: " .. name)
+			return true
+		end
+		local remote = Instance.new("RemoteFunction")
+		remote.Name = name
+		remote.Parent = parent
+		log("Created RemoteFunction: " .. name .. " in " .. action.parent)
+		return true
+	end
 	
 	local existing = parent:FindFirstChild(name)
 	if existing then
@@ -113,6 +160,10 @@ local function createScript(action)
 		elseif action.type == "delete" then
 			existing:Destroy()
 			log("Deleted " .. scriptClass .. ": " .. name .. " from " .. action.parent)
+			return true
+		elseif action.type == "create" then
+			existing.Source = content
+			log("Updated existing " .. scriptClass .. ": " .. name .. " in " .. action.parent)
 			return true
 		end
 	end
@@ -140,31 +191,48 @@ local function createScript(action)
 end
 
 local function processActions(actions)
+	local processed = 0
 	for _, action in ipairs(actions) do
-		local success = pcall(function()
+		local success, err = pcall(function()
 			createScript(action)
 		end)
 		
-		if not success then
-			log("Failed to process action for: " .. action.name, true)
+		if success then
+			processed = processed + 1
+		else
+			log("Failed to process action for: " .. tostring(action.name) .. " - " .. tostring(err), true)
 		end
 	end
+	return processed
 end
 
 local function pollForActions()
+	log("Starting to poll for actions...")
 	while polling do
 		local success, response = makeRequest("getActions")
 		
-		if success and response.actions and #response.actions > 0 then
-			log("Received " .. #response.actions .. " actions from MelonAI")
-			processActions(response.actions)
+		if success then
+			if response.actions and #response.actions > 0 then
+				log("Received " .. #response.actions .. " actions from MelonAI")
+				local processed = processActions(response.actions)
+				log("Processed " .. processed .. " actions successfully")
+			end
+		else
+			log("Poll failed: " .. tostring(response), true)
 		end
 		
 		wait(CONFIG.POLL_INTERVAL)
 	end
+	log("Stopped polling")
 end
 
 local function connect()
+	if CONFIG.ENDPOINT == "" then
+		log("Please configure the endpoint URL in settings first!", true)
+		return
+	end
+	
+	log("Connecting to: " .. CONFIG.ENDPOINT)
 	local success, response = makeRequest("ping")
 	
 	if success and response.success then
@@ -229,12 +297,12 @@ local function syncContext()
 	end
 	
 	local context = collectProjectContext()
-	local success, response = makeRequest("context", context)
+	local success, response = makeRequest("context", {data = context})
 	
 	if success then
 		log("Project context synced: " .. #context.scripts .. " scripts")
 	else
-		log("Failed to sync context", true)
+		log("Failed to sync context: " .. tostring(response), true)
 	end
 end
 
@@ -254,10 +322,10 @@ local settingsWidget = plugin:CreateDockWidgetPluginGui(
 		Enum.InitialDockState.Float,
 		false,
 		false,
-		300,
-		400,
-		250,
-		300
+		320,
+		280,
+		280,
+		250
 	)
 )
 settingsWidget.Title = "MelonAI Settings"
@@ -269,31 +337,34 @@ settingsFrame.BorderSizePixel = 0
 settingsFrame.Parent = settingsWidget
 
 local layout = Instance.new("UIListLayout")
-layout.Padding = UDim.new(0, 10)
+layout.Padding = UDim.new(0, 8)
 layout.FillDirection = Enum.FillDirection.Vertical
 layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 layout.Parent = settingsFrame
 
 local padding = Instance.new("UIPadding")
-padding.PaddingAll = UDim.new(0, 15)
+padding.PaddingTop = UDim.new(0, 15)
+padding.PaddingBottom = UDim.new(0, 15)
+padding.PaddingLeft = UDim.new(0, 15)
+padding.PaddingRight = UDim.new(0, 15)
 padding.Parent = settingsFrame
 
 local function createLabel(text)
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, 0, 0, 20)
+	label.Size = UDim2.new(1, 0, 0, 18)
 	label.BackgroundTransparency = 1
-	label.TextColor3 = Color3.fromRGB(200, 200, 200)
-	label.TextSize = 14
+	label.TextColor3 = Color3.fromRGB(180, 180, 180)
+	label.TextSize = 13
 	label.Text = text
 	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.Font = Enum.Font.SourceSans
+	label.Font = Enum.Font.SourceSansSemibold
 	label.Parent = settingsFrame
 	return label
 end
 
 local function createTextBox(placeholder, getValue, setValue)
 	local box = Instance.new("TextBox")
-	box.Size = UDim2.new(1, 0, 0, 30)
+	box.Size = UDim2.new(1, 0, 0, 32)
 	box.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 	box.BorderSizePixel = 0
 	box.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -303,7 +374,13 @@ local function createTextBox(placeholder, getValue, setValue)
 	box.Font = Enum.Font.SourceSans
 	box.ClearTextOnFocus = false
 	box.Text = getValue()
+	box.TextXAlignment = Enum.TextXAlignment.Left
 	box.Parent = settingsFrame
+	
+	local boxPadding = Instance.new("UIPadding")
+	boxPadding.PaddingLeft = UDim.new(0, 8)
+	boxPadding.PaddingRight = UDim.new(0, 8)
+	boxPadding.Parent = box
 	
 	local corner = Instance.new("UICorner")
 	corner.CornerRadius = UDim.new(0, 6)
@@ -311,6 +388,7 @@ local function createTextBox(placeholder, getValue, setValue)
 	
 	box.FocusLost:Connect(function()
 		setValue(box.Text)
+		log("Updated: " .. placeholder)
 	end)
 	
 	return box
@@ -323,20 +401,46 @@ createTextBox("https://your-app.vercel.app/api/plugin",
 )
 
 createLabel("Session ID:")
-createTextBox("Enter session ID from MelonAI",
+createTextBox("From MelonAI website settings",
 	function() return CONFIG.SESSION_ID end,
 	function(v) CONFIG.SESSION_ID = v end
 )
 
 createLabel("Secret:")
-createTextBox("Enter secret from MelonAI",
+createTextBox("From MelonAI website settings",
 	function() return CONFIG.SECRET end,
 	function(v) CONFIG.SECRET = v end
 )
 
-local settingsButton = toolbar:CreateButton("Settings", "Open MelonAI Settings", "rbxassetid://6031075933")
+local spacer = Instance.new("Frame")
+spacer.Size = UDim2.new(1, 0, 0, 5)
+spacer.BackgroundTransparency = 1
+spacer.Parent = settingsFrame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 0, 20)
+statusLabel.BackgroundTransparency = 1
+statusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+statusLabel.TextSize = 12
+statusLabel.Text = "Status: Not connected"
+statusLabel.Font = Enum.Font.SourceSans
+statusLabel.Parent = settingsFrame
+
+spawn(function()
+	while true do
+		if connected then
+			statusLabel.Text = "Status: Connected"
+			statusLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+		else
+			statusLabel.Text = "Status: Disconnected"
+			statusLabel.TextColor3 = Color3.fromRGB(200, 100, 100)
+		end
+		wait(1)
+	end
+end)
+
 settingsButton.Click:Connect(function()
 	settingsWidget.Enabled = not settingsWidget.Enabled
 end)
 
-log("MelonAI Plugin loaded! Click 'Connect' to start.")
+log("MelonAI Plugin loaded! Click 'Settings' to configure, then 'Connect' to start.")

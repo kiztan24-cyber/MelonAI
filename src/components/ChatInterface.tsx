@@ -112,17 +112,29 @@ IMPORTANT: Before implementing anything, create a detailed plan first. The user 
       addPendingActions(actions);
       pluginBridge.queueActions(actions);
 
+      const apiEndpoint = `${window.location.origin}/api/plugin`;
+      try {
+        await fetch(apiEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'queueActions',
+            sessionId: pluginSession.id,
+            secret: settings.pluginSecret,
+            actions: actions
+          })
+        });
+      } catch (err) {
+        console.error('Failed to queue actions to API:', err);
+      }
+
       const summary = actions.map(a => 
         `${a.type === 'create' ? 'Created' : a.type === 'update' ? 'Updated' : 'Deleted'} ${a.scriptType}: **${a.name}** in ${a.parent}`
       ).join('\n');
 
       addMessage({
         role: 'assistant',
-        content: `Plan executed successfully!\n\n**Actions completed:**\n${summary}\n\n${
-          pluginBridge.isConnected() 
-            ? 'The scripts have been sent to your Roblox Studio plugin.' 
-            : 'Connect the Roblox Studio plugin to sync these scripts.'
-        }`,
+        content: `Plan executed successfully!\n\n**Actions completed:**\n${summary}\n\nThe scripts have been queued. Make sure your Roblox Studio plugin is connected to receive them.`,
         actions,
       });
 
